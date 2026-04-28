@@ -142,9 +142,23 @@ function doSwipe() {
 /** regenerate：重新生成（替换当前回复，用于空回） */
 function doRegenerate() {
     try {
-        const $r = jQuery('#option_regenerate');
-        if ($r.length) { $r.trigger('click'); return true; }
-        // fallback到swipe
+        const context = getContext();
+
+        // 方式1：各种可能的DOM选择器
+        const selectors = ['#option_regenerate', '.option_regenerate', '[id*="regenerate"]'];
+        for (const sel of selectors) {
+            const $el = jQuery(sel);
+            if ($el.length) { $el.last().trigger('click'); return true; }
+        }
+
+        // 方式2：slash命令
+        if (typeof context.executeSlashCommandsWithOptions === 'function') {
+            context.executeSlashCommandsWithOptions('/regenerate');
+            return true;
+        }
+
+        // 方式3：fallback到swipe
+        toast('找不到regenerate，用swipe代替', 'info');
         return doSwipe();
     } catch (e) {
         toast('重新生成失败: ' + e.message, 'error');
