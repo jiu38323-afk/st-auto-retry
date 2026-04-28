@@ -17,7 +17,7 @@ const DEFAULTS = {
     detectTruncation: true,
     maxRetries: 3,
     retryDelay: 1500,
-    minLength: 5,
+    minLength: 100,
     endMarker: '',        // 结束标记（不用防截断词时填 > ）
     useBuffer: true,      // 是否启用防截断缓冲区检测
     bufferMarker: '<!--BUFFER', // 防截断缓冲区标记
@@ -91,11 +91,9 @@ function isTruncatedResponse(text) {
     const okEndings = '。！？…」』）】》"\'；.!?)]}\'"*~_-|;:';
     if (okEndings.includes(lastChar)) return false;
 
-    if (trimmed.length > 100) {
-        console.log(`[Auto-Retry] 疑似截断 — 末尾:"${lastChar}" 长度:${trimmed.length}`);
-        return true;
-    }
-    return false;
+    // 末尾不是正常标点 → 截断（已排除<20字的短文本）
+    console.log(`[Auto-Retry] 疑似截断 — 末尾:"${lastChar}" 长度:${trimmed.length}`);
+    return true;
 }
 
 function detectProblem(text) {
@@ -111,13 +109,26 @@ function detectProblem(text) {
 function doSwipe() {
     try {
         const context = getContext();
+
+        // 方式1: 内部API
         if (typeof context.swipe_right === 'function') {
             context.swipe_right();
             return true;
         }
-        // fallback: DOM按钮
-        const $s = jQuery('#swipe_right');
-        if ($s.length) { $s.trigger('click'); return true; }
+
+        // 方式2: 各种可能的DOM选择器
+        const selectors = ['#swipe_right', '.swipe_right', '.swipe-right', '[id*="swipe_right"]'];
+        for (const sel of selectors) {
+            const $el = jQuery(sel);
+            if ($el.length) { $el.last().trigger('click'); return true; }
+        }
+
+        // 方式3: slash命令
+        if (typeof context.executeSlashCommandsWithOptions === 'function') {
+            context.executeSlashCommandsWithOptions('/swipe');
+            return true;
+        }
+
         toast('找不到swipe方式', 'warning');
         return false;
     } catch (e) {
