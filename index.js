@@ -41,6 +41,8 @@ function getSettings() {
     for (const [key, val] of Object.entries(DEFAULTS)) {
         if (s[key] === undefined) s[key] = val;
     }
+    // 迁移：旧版本minLength太小，强制更新
+    if (s.minLength < 100) s.minLength = 100;
     return s;
 }
 
@@ -88,7 +90,7 @@ function isTruncatedResponse(text) {
     if ((trimmed.match(/```/g) || []).length % 2 !== 0) return true;
 
     const lastChar = trimmed.slice(-1);
-    const okEndings = '。！？…」』）】》"\'；.!?)]}\'"*~_-|;:';
+    const okEndings = '>＞';
     if (okEndings.includes(lastChar)) return false;
 
     // 末尾不是正常标点 → 截断（已排除<20字的短文本）
@@ -265,6 +267,10 @@ function addUI() {
                     <small style="opacity:0.6">缓冲区标记优先。只有缓冲区标记为空时才看这个。</small>
                 </div>
                 <div style="margin:4px 0">
+                    <label>空回阈值(字符) <input id="ar_minlen" type="number" min="0" max="5000" step="100" style="width:80px" /></label>
+                    <br/><small style="opacity:0.6">少于这个字符数=空回（重新生成），多于=截断（翻页swipe）</small>
+                </div>
+                <div style="margin:4px 0">
                     <label>最大重试 <input id="ar_max" type="number" min="1" max="10" style="width:50px" /></label>
                 </div>
                 <div style="margin:4px 0">
@@ -306,6 +312,9 @@ function addUI() {
     });
     jQuery('#ar_use_buffer').prop('checked', s.useBuffer).on('change', function () {
         s.useBuffer = this.checked; saveSettingsDebounced();
+    });
+    jQuery('#ar_minlen').val(s.minLength).on('input', function () {
+        s.minLength = parseInt(this.value) || DEFAULTS.minLength; saveSettingsDebounced();
     });
     jQuery('#ar_max').val(s.maxRetries).on('input', function () {
         s.maxRetries = parseInt(this.value) || DEFAULTS.maxRetries; saveSettingsDebounced();
