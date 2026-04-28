@@ -18,8 +18,8 @@ const DEFAULTS = {
     maxRetries: 3,
     retryDelay: 1500,
     minLength: 5,
-    endMarker: '>',       // 自定义结束标记，大部分预设/角色卡以 > 结尾
-    markerSearchRange: 100, // 在末尾多少字符内搜索标记
+    endMarker: '',        // 结束标记（不用防截断词时填 > ）
+    bufferMarker: '<!--BUFFER', // 防截断缓冲区标记，回复里有这个=正文完整
 };
 
 let retryCount = 0;
@@ -51,26 +51,29 @@ function isEmptyResponse(text) {
 }
 
 /**
- * 截断检测
- * 先剥离HTML注释（防截断填充内容），只检查正文部分
- * 模式A（有结束标记）：正文末尾是否为标记
- * 模式B（无结束标记）：正文末尾标点判断
+ * 截断检测（三级优先）
+ * 1. 缓冲区标记模式：回复里有 <!--BUFFER = 正文完整，没有 = 截断
+ * 2. 结束标记模式：正文末尾是否为标记
+ * 3. 标点检测：fallback
  */
 function isTruncatedResponse(text) {
     if (!text || text.trim().length < 20) return false;
-    let trimmed = text.trim();
+    const trimmed = text.trim();
     const s = getSettings();
 
-    // ---- 剥离防截断填充内容（只去掉 <!--BUFFER 标记的）----
-    // 小剧场等普通 <!-- --> 注释保留检测
-    const bufferStart = trimmed.lastIndexOf('<!--BUFFER');
-    if (bufferStart > 0) {
-        trimmed = trimmed.substring(0, bufferStart).trim();
-        console.log('[Auto-Retry] 剥离防截断缓冲区，只检查正文');
-        if (trimmed.length < 20) return false;
+    // ---- 优先：缓冲区标记检测（配合防截断词）----
+    if (s.bufferMarker && s.bufferMarker.trim()) {
+        const marker = s.bufferMarker.trim();
+        if (trimmed.includes(marker)) {
+            console.log(`[Auto-Retry] 找到缓冲区标记「${marker}」→ 正文完整`);
+            return false;
+        } else {
+            console.log(`[Auto-Retry] 未找到缓冲区标记「${marker}」→ 截断`);
+            return true;
+        }
     }
 
-    // ---- 模式A：自定义结束标记 ----
+    // ---- 次选：结束标记检测 ----
     if (s.endMarker && s.endMarker.trim()) {
         const marker = s.endMarker.trim();
         if (!trimmed.endsWith(marker)) {
@@ -80,16 +83,13 @@ function isTruncatedResponse(text) {
         return false;
     }
 
-    // ---- 模式B：标点检测（fallback）----
-    // 未闭合代码块
+    // ---- 兜底：标点检测 ----
     if ((trimmed.match(/```/g) || []).length % 2 !== 0) return true;
 
     const lastChar = trimmed.slice(-1);
-    // 注意：逗号「，」和顿号「、」不算正常结尾——以这些结尾大概率是截断
     const okEndings = '。！？…」』）】》"\'；.!?)]}\'"*~_-|;:';
     if (okEndings.includes(lastChar)) return false;
 
-    // 超过100字且末尾不是正常标点
     if (trimmed.length > 100) {
         console.log(`[Auto-Retry] 疑似截断 — 末尾:"${lastChar}" 长度:${trimmed.length}`);
         return true;
@@ -226,9 +226,14 @@ function addUI() {
                     <span>检测截断</span>
                 </label>
                 <div style="margin:6px 0">
-                    <label style="display:block;margin-bottom:2px">结束标记（填你预设/角色卡的结束符号）</label>
-                    <input id="ar_marker" type="text" placeholder="如 > 或 --> 留空则用自动检测" style="width:100%;box-sizing:border-box" />
-                    <small style="opacity:0.6">回复末尾没有这个标记 = 截断。留空则按标点自动判断。</small>
+                    <label style="display:block;margin-bottom:2px">🛡️ 防截断缓冲区标记</label>
+                    <input id="ar_buffer" type="text" placeholder="如 <!--BUFFER" style="width:100%;box-sizing:border-box" />
+                    <small style="opacity:0.6">配合防截断词使用。回复里有这个标记=正文完整，没有=截断重roll。留空则不启用。</small>
+                </div>
+                <div style="margin:6px 0">
+                    <label style="display:block;margin-bottom:2px">结束标记（不用防截断词时）</label>
+                    <input id="ar_marker" type="text" placeholder="如 > 留空则用标点自动检测" style="width:100%;box-sizing:border-box" />
+                    <small style="opacity:0.6">缓冲区标记优先。只有缓冲区标记为空时才看这个。</small>
                 </div>
                 <div style="margin:4px 0">
                     <label>最大重试 <input id="ar_max" type="number" min="1" max="10" style="width:50px" /></label>
@@ -266,6 +271,9 @@ function addUI() {
     });
     jQuery('#ar_marker').val(s.endMarker).on('input', function () {
         s.endMarker = this.value; saveSettingsDebounced();
+    });
+    jQuery('#ar_buffer').val(s.bufferMarker).on('input', function () {
+        s.bufferMarker = this.value; saveSettingsDebounced();
     });
     jQuery('#ar_max').val(s.maxRetries).on('input', function () {
         s.maxRetries = parseInt(this.value) || DEFAULTS.maxRetries; saveSettingsDebounced();
