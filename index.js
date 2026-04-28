@@ -19,7 +19,8 @@ const DEFAULTS = {
     retryDelay: 1500,
     minLength: 5,
     endMarker: '',        // 结束标记（不用防截断词时填 > ）
-    bufferMarker: '<!--BUFFER', // 防截断缓冲区标记，回复里有这个=正文完整
+    useBuffer: true,      // 是否启用防截断缓冲区检测
+    bufferMarker: '<!--BUFFER', // 防截断缓冲区标记
 };
 
 let retryCount = 0;
@@ -62,7 +63,7 @@ function isTruncatedResponse(text) {
     const s = getSettings();
 
     // ---- 优先：缓冲区标记检测（配合防截断词）----
-    if (s.bufferMarker && s.bufferMarker.trim()) {
+    if (s.useBuffer && s.bufferMarker && s.bufferMarker.trim()) {
         const marker = s.bufferMarker.trim();
         if (trimmed.includes(marker)) {
             console.log(`[Auto-Retry] 找到缓冲区标记「${marker}」→ 正文完整`);
@@ -106,25 +107,33 @@ function detectProblem(text) {
 
 // ========== 重试 ==========
 
-function doRetry() {
+/** swipe：生成新备选（保留当前回复，用于截断） */
+function doSwipe() {
     try {
-        // 优先用SillyTavern内部API（最可靠）
         const context = getContext();
         if (typeof context.swipe_right === 'function') {
             context.swipe_right();
             return true;
         }
-
-        // fallback: DOM按钮
         const $s = jQuery('#swipe_right');
         if ($s.length) { $s.trigger('click'); return true; }
-        const $r = jQuery('#option_regenerate');
-        if ($r.length) { $r.trigger('click'); return true; }
-
-        toast('找不到重试方式', 'warning');
+        toast('找不到swipe按钮', 'warning');
         return false;
     } catch (e) {
-        toast('重试失败: ' + e.message, 'error');
+        toast('swipe失败: ' + e.message, 'error');
+        return false;
+    }
+}
+
+/** regenerate：重新生成（替换当前回复，用于空回） */
+function doRegenerate() {
+    try {
+        const $r = jQuery('#option_regenerate');
+        if ($r.length) { $r.trigger('click'); return true; }
+        // fallback到swipe
+        return doSwipe();
+    } catch (e) {
+        toast('重新生成失败: ' + e.message, 'error');
         return false;
     }
 }
@@ -167,8 +176,13 @@ function onGenerationEnded() {
     if (problem) {
         retryCount++;
         isRetrying = true;
-        toast(`检测到「${problem}」→ 第${retryCount}/${settings.maxRetries}次重试`, 'info');
-        setTimeout(doRetry, settings.retryDelay);
+        if (problem === '空回复') {
+            toast(`检测到「空回复」→ 第${retryCount}/${settings.maxRetries}次重新生成`, 'info');
+            setTimeout(doRegenerate, settings.retryDelay);
+        } else {
+            toast(`检测到「截断」→ 第${retryCount}/${settings.maxRetries}次swipe`, 'info');
+            setTimeout(doSwipe, settings.retryDelay);
+        }
     } else {
         if (isRetrying) toast('重试成功！', 'success');
         retryCount = 0;
@@ -199,7 +213,7 @@ function testDetection() {
 
 function testSwipe() {
     toast('手动触发swipe...', 'info');
-    if (doRetry()) toast('swipe已触发！', 'success');
+    if (doSwipe()) toast('swipe已触发！', 'success');
 }
 
 // ========== UI ==========
@@ -226,9 +240,12 @@ function addUI() {
                     <span>检测截断</span>
                 </label>
                 <div style="margin:6px 0">
-                    <label style="display:block;margin-bottom:2px">🛡️ 防截断缓冲区标记</label>
-                    <input id="ar_buffer" type="text" placeholder="如 <!--BUFFER" style="width:100%;box-sizing:border-box" />
-                    <small style="opacity:0.6">配合防截断词使用。回复里有这个标记=正文完整，没有=截断重roll。留空则不启用。</small>
+                    <label class="checkbox_label">
+                        <input id="ar_use_buffer" type="checkbox" />
+                        <span>🛡️ 启用防截断缓冲区检测</span>
+                    </label>
+                    <input id="ar_buffer" type="text" placeholder="如 <!--BUFFER 或 <～>" style="width:100%;box-sizing:border-box;margin-top:4px" />
+                    <small style="opacity:0.6">回复里有这个标记=正文完整，没有=截断重roll。标记要和你的防截断词一致。</small>
                 </div>
                 <div style="margin:6px 0">
                     <label style="display:block;margin-bottom:2px">结束标记（不用防截断词时）</label>
@@ -274,6 +291,9 @@ function addUI() {
     });
     jQuery('#ar_buffer').val(s.bufferMarker).on('input', function () {
         s.bufferMarker = this.value; saveSettingsDebounced();
+    });
+    jQuery('#ar_use_buffer').prop('checked', s.useBuffer).on('change', function () {
+        s.useBuffer = this.checked; saveSettingsDebounced();
     });
     jQuery('#ar_max').val(s.maxRetries).on('input', function () {
         s.maxRetries = parseInt(this.value) || DEFAULTS.maxRetries; saveSettingsDebounced();
