@@ -107,32 +107,17 @@ function detectProblem(text) {
 
 // ========== 重试 ==========
 
-/** swipe：生成新备选（保留当前回复，用于截断） */
+/** swipe：翻页生成新备选（保留当前回复，用于截断） */
 function doSwipe() {
     try {
         const context = getContext();
-
-        // 先确保swipe按钮可见
-        if (typeof context.showSwipeButtons === 'function') {
-            context.showSwipeButtons();
-        }
-
-        // 方式1：内部API
         if (typeof context.swipe_right === 'function') {
             context.swipe_right();
             return true;
         }
-
-        // 方式2：Generate API
-        if (typeof context.generate === 'function') {
-            context.generate('swipe');
-            return true;
-        }
-
-        // 方式3：DOM按钮
+        // fallback: DOM按钮
         const $s = jQuery('#swipe_right');
         if ($s.length) { $s.trigger('click'); return true; }
-
         toast('找不到swipe方式', 'warning');
         return false;
     } catch (e) {
