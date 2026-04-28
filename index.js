@@ -18,13 +18,14 @@ const DEFAULTS = {
     maxRetries: 3,
     retryDelay: 1500,
     minLength: 5,
-    endMarker: '',       // 自定义结束标记，如 > 或 --> 等
+    endMarker: '>',       // 自定义结束标记，大部分预设/角色卡以 > 结尾
     markerSearchRange: 100, // 在末尾多少字符内搜索标记
 };
 
 let retryCount = 0;
 let isRetrying = false;
 let lastChatLength = 0;
+let manualStop = false;  // 手动停止标记，跳过下一次检测
 
 // ========== 工具 ==========
 
@@ -121,6 +122,14 @@ function doRetry() {
 function onGenerationEnded() {
     const settings = getSettings();
     if (!settings.enabled) return;
+
+    // 手动停止的回复不检测
+    if (manualStop) {
+        manualStop = false;
+        retryCount = 0;
+        isRetrying = false;
+        return;
+    }
 
     const context = getContext();
     const chat = context?.chat;
@@ -265,5 +274,6 @@ jQuery(async () => {
     getSettings();
     addUI();
     eventSource.on(event_types.GENERATION_ENDED, onGenerationEnded);
+    eventSource.on(event_types.GENERATION_STOPPED, () => { manualStop = true; });
     toast('v1.3.0 已加载', 'success');
 });
