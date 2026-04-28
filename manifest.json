@@ -5,8 +5,8 @@
     "optional": [],
     "js": "index.js",
     "css": "",
-    "author": "Elvis & 小九",
-    "version": "1.1.0",
+    "author": "Elvis",
+    "version": "1.2.0",
     "homePage": "https://github.com/jiu38323-afk/st-auto-retry",
     "auto_update": false
 }

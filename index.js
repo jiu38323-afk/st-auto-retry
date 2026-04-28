@@ -1,20 +1,16 @@
 /**
  * Auto Retry - 截断/空回自动重试插件
- * by Elvis & 小九
- * v1.1.0 — 修复导入路径
+ * by Elvis
+ * v1.2.0 — 加测试按钮 + toast提示
  *
  * 检测AI回复截断或空回，自动静默触发重新生成。
  */
 
-// ========== 导入 ==========
-// 路径: third-party/st-auto-retry/index.js → scripts/extensions.js
 import { extension_settings, getContext } from '../../../extensions.js';
-// 路径: third-party/st-auto-retry/index.js → public/script.js
 import { eventSource, event_types, saveSettingsDebounced } from '../../../../script.js';
 
 const EXT_NAME = 'auto-retry';
 
-// ========== 默认设置 ==========
 const DEFAULTS = {
     enabled: true,
     detectEmpty: true,
@@ -24,12 +20,19 @@ const DEFAULTS = {
     minLength: 5,
 };
 
-// ========== 运行状态 ==========
 let retryCount = 0;
 let isRetrying = false;
 let lastChatLength = 0;
 
-// ========== 设置管理 ==========
+// ========== 工具函数 ==========
+
+function toast(msg, type = 'info') {
+    if (typeof toastr !== 'undefined') {
+        toastr[type](msg, 'Auto Retry');
+    }
+    console.log(`[Auto-Retry] ${msg}`);
+}
+
 function getSettings() {
     if (!extension_settings[EXT_NAME]) {
         extension_settings[EXT_NAME] = {};
@@ -50,48 +53,48 @@ function isEmptyResponse(text) {
 
 function isTruncatedResponse(text) {
     if (!text || text.trim().length < 20) return false;
-
     const trimmed = text.trim();
 
-    // 未闭合的代码块
+    // 未闭合代码块
     if ((trimmed.match(/```/g) || []).length % 2 !== 0) return true;
 
-    // 末尾字符检查
     const lastChar = trimmed.slice(-1);
     const okEndings = '。！？…」』）】》"\'；：、，.!?)]}\'"*~_-|,;:';
-
     if (okEndings.includes(lastChar)) return false;
 
-    // 超过100字且末尾不是正常标点 → 大概率截断
-    if (trimmed.length > 100) {
-        console.log(`[Auto-Retry] 疑似截断 — 末尾:"${lastChar}" 长度:${trimmed.length}`);
-        return true;
-    }
+    if (trimmed.length > 100) return true;
 
     return false;
+}
+
+/**
+ * 对一段文本执行检测，返回结果
+ */
+function detectProblem(text) {
+    const s = getSettings();
+    if (s.detectEmpty && isEmptyResponse(text)) return '空回复';
+    if (s.detectTruncation && isTruncatedResponse(text)) return '截断';
+    return null;
 }
 
 // ========== 重试逻辑 ==========
 
 function doRetry() {
     try {
-        // 优先 swipe
         const el = document.getElementById('swipe_right')
             || document.querySelector('.swipe_right');
         if (el) { el.click(); return true; }
 
-        // 次选 jQuery
         const $s = jQuery('#swipe_right');
         if ($s.length) { $s.trigger('click'); return true; }
 
-        // 最后 regenerate
         const $r = jQuery('#option_regenerate');
         if ($r.length) { $r.trigger('click'); return true; }
 
-        console.warn('[Auto-Retry] 找不到重试按钮');
+        toast('找不到重试按钮', 'warning');
         return false;
     } catch (e) {
-        console.error('[Auto-Retry] 重试失败:', e);
+        toast('重试失败: ' + e.message, 'error');
         return false;
     }
 }
@@ -107,7 +110,6 @@ function onGenerationEnded() {
     const last = chat[chat.length - 1];
     if (last.is_user) { retryCount = 0; isRetrying = false; return; }
 
-    // 新一轮对话 → 重置
     if (chat.length !== lastChatLength) {
         retryCount = 0;
         isRetrying = false;
@@ -115,31 +117,58 @@ function onGenerationEnded() {
     }
 
     if (retryCount >= settings.maxRetries) {
-        console.log(`[Auto-Retry] 已达上限 ${retryCount} 次，停止`);
+        toast(`已重试${retryCount}次，放弃`, 'warning');
         retryCount = 0;
         isRetrying = false;
         return;
     }
 
     const text = last.mes || '';
-    let reason = '';
+    const problem = detectProblem(text);
 
-    if (settings.detectEmpty && isEmptyResponse(text)) {
-        reason = '空回复';
-    } else if (settings.detectTruncation && isTruncatedResponse(text)) {
-        reason = '截断';
-    }
-
-    if (reason) {
+    if (problem) {
         retryCount++;
         isRetrying = true;
-        console.log(`[Auto-Retry] 检测到「${reason}」→ 第${retryCount}/${settings.maxRetries}次重试`);
+        toast(`检测到「${problem}」→ 第${retryCount}/${settings.maxRetries}次重试`, 'info');
         setTimeout(doRetry, settings.retryDelay);
     } else {
-        if (isRetrying) console.log('[Auto-Retry] 重试成功');
+        if (isRetrying) toast('重试成功！', 'success');
         retryCount = 0;
         isRetrying = false;
     }
+}
+
+// ========== 测试功能 ==========
+
+function testDetection() {
+    const context = getContext();
+    const chat = context?.chat;
+    if (!chat || chat.length === 0) {
+        toast('没有聊天记录', 'warning');
+        return;
+    }
+
+    const last = chat[chat.length - 1];
+    if (last.is_user) {
+        toast('最后一条是用户消息，请先让AI回复', 'warning');
+        return;
+    }
+
+    const text = last.mes || '';
+    const problem = detectProblem(text);
+
+    if (problem) {
+        toast(`检测结果：「${problem}」✗\n实际使用时会自动重试`, 'warning');
+    } else {
+        const preview = text.trim().slice(-20);
+        toast(`检测结果：正常 ✓\n末尾："${preview}"`, 'success');
+    }
+}
+
+function testSwipe() {
+    toast('手动触发swipe...', 'info');
+    const ok = doRetry();
+    if (ok) toast('swipe已触发！', 'success');
 }
 
 // ========== 设置面板 ==========
@@ -171,16 +200,23 @@ function addUI() {
                 <div style="margin:4px 0">
                     <label>延迟(ms) <input id="ar_delay" type="number" min="500" max="10000" step="100" style="width:70px" /></label>
                 </div>
+                <hr style="margin:8px 0" />
+                <div style="display:flex;gap:6px">
+                    <button id="ar_test_detect" class="menu_button" style="font-size:12px;padding:4px 8px">
+                        🔍 检测当前回复
+                    </button>
+                    <button id="ar_test_swipe" class="menu_button" style="font-size:12px;padding:4px 8px">
+                        🔄 手动触发swipe
+                    </button>
+                </div>
             </div>
         </div>
     </div>`;
 
-    // 尝试插入到扩展设置区域
     const $target = jQuery('#extensions_settings2, #extensions_settings').first();
     if ($target.length) {
         $target.append(html);
     } else {
-        // fallback: 插到 #top-settings-holder
         jQuery('#top-settings-holder').append(html);
     }
 
@@ -206,6 +242,10 @@ function addUI() {
         s.retryDelay = parseInt(this.value) || DEFAULTS.retryDelay;
         saveSettingsDebounced();
     });
+
+    // 测试按钮
+    jQuery('#ar_test_detect').on('click', testDetection);
+    jQuery('#ar_test_swipe').on('click', testSwipe);
 }
 
 // ========== 初始化 ==========
@@ -214,5 +254,5 @@ jQuery(async () => {
     getSettings();
     addUI();
     eventSource.on(event_types.GENERATION_ENDED, onGenerationEnded);
-    console.log('[Auto-Retry] ✔ v1.1.0 已加载');
+    toast('v1.2.0 已加载', 'success');
 });
