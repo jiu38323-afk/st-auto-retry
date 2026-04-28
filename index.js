@@ -52,13 +52,23 @@ function isEmptyResponse(text) {
 
 /**
  * 截断检测
- * 模式A（有结束标记）：末尾N字符内是否包含标记
- * 模式B（无结束标记）：末尾标点判断
+ * 先剥离HTML注释（防截断填充内容），只检查正文部分
+ * 模式A（有结束标记）：正文末尾是否为标记
+ * 模式B（无结束标记）：正文末尾标点判断
  */
 function isTruncatedResponse(text) {
     if (!text || text.trim().length < 20) return false;
-    const trimmed = text.trim();
+    let trimmed = text.trim();
     const s = getSettings();
+
+    // ---- 剥离防截断填充内容（只去掉 <!--BUFFER 标记的）----
+    // 小剧场等普通 <!-- --> 注释保留检测
+    const bufferStart = trimmed.lastIndexOf('<!--BUFFER');
+    if (bufferStart > 0) {
+        trimmed = trimmed.substring(0, bufferStart).trim();
+        console.log('[Auto-Retry] 剥离防截断缓冲区，只检查正文');
+        if (trimmed.length < 20) return false;
+    }
 
     // ---- 模式A：自定义结束标记 ----
     if (s.endMarker && s.endMarker.trim()) {
