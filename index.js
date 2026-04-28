@@ -1,7 +1,7 @@
 /**
  * Auto Retry - 截断/空回自动重试插件
  * by Elvis
- * v1.2.0 — 加测试按钮 + toast提示
+ * v1.3.0 — 自定义结束标记 + 改进截断检测
  *
  * 检测AI回复截断或空回，自动静默触发重新生成。
  */
@@ -18,25 +18,23 @@ const DEFAULTS = {
     maxRetries: 3,
     retryDelay: 1500,
     minLength: 5,
+    endMarker: '',       // 自定义结束标记，如 > 或 --> 等
+    markerSearchRange: 100, // 在末尾多少字符内搜索标记
 };
 
 let retryCount = 0;
 let isRetrying = false;
 let lastChatLength = 0;
 
-// ========== 工具函数 ==========
+// ========== 工具 ==========
 
 function toast(msg, type = 'info') {
-    if (typeof toastr !== 'undefined') {
-        toastr[type](msg, 'Auto Retry');
-    }
+    if (typeof toastr !== 'undefined') toastr[type](msg, 'Auto Retry');
     console.log(`[Auto-Retry] ${msg}`);
 }
 
 function getSettings() {
-    if (!extension_settings[EXT_NAME]) {
-        extension_settings[EXT_NAME] = {};
-    }
+    if (!extension_settings[EXT_NAME]) extension_settings[EXT_NAME] = {};
     const s = extension_settings[EXT_NAME];
     for (const [key, val] of Object.entries(DEFAULTS)) {
         if (s[key] === undefined) s[key] = val;
@@ -51,25 +49,45 @@ function isEmptyResponse(text) {
     return text.replace(/\s/g, '').length < getSettings().minLength;
 }
 
+/**
+ * 截断检测
+ * 模式A（有结束标记）：末尾N字符内是否包含标记
+ * 模式B（无结束标记）：末尾标点判断
+ */
 function isTruncatedResponse(text) {
     if (!text || text.trim().length < 20) return false;
     const trimmed = text.trim();
+    const s = getSettings();
 
+    // ---- 模式A：自定义结束标记 ----
+    if (s.endMarker && s.endMarker.trim()) {
+        const marker = s.endMarker.trim();
+        const range = Math.min(s.markerSearchRange, trimmed.length);
+        const tail = trimmed.slice(-range);
+        if (!tail.includes(marker)) {
+            console.log(`[Auto-Retry] 结束标记「${marker}」未在末尾${range}字符内找到`);
+            return true;
+        }
+        return false;
+    }
+
+    // ---- 模式B：标点检测（fallback）----
     // 未闭合代码块
     if ((trimmed.match(/```/g) || []).length % 2 !== 0) return true;
 
     const lastChar = trimmed.slice(-1);
-    const okEndings = '。！？…」』）】》"\'；：、，.!?)]}\'"*~_-|,;:';
+    // 注意：逗号「，」和顿号「、」不算正常结尾——以这些结尾大概率是截断
+    const okEndings = '。！？…」』）】》"\'；.!?)]}\'"*~_-|;:';
     if (okEndings.includes(lastChar)) return false;
 
-    if (trimmed.length > 100) return true;
-
+    // 超过100字且末尾不是正常标点
+    if (trimmed.length > 100) {
+        console.log(`[Auto-Retry] 疑似截断 — 末尾:"${lastChar}" 长度:${trimmed.length}`);
+        return true;
+    }
     return false;
 }
 
-/**
- * 对一段文本执行检测，返回结果
- */
 function detectProblem(text) {
     const s = getSettings();
     if (s.detectEmpty && isEmptyResponse(text)) return '空回复';
@@ -77,20 +95,17 @@ function detectProblem(text) {
     return null;
 }
 
-// ========== 重试逻辑 ==========
+// ========== 重试 ==========
 
 function doRetry() {
     try {
         const el = document.getElementById('swipe_right')
             || document.querySelector('.swipe_right');
         if (el) { el.click(); return true; }
-
         const $s = jQuery('#swipe_right');
         if ($s.length) { $s.trigger('click'); return true; }
-
         const $r = jQuery('#option_regenerate');
         if ($r.length) { $r.trigger('click'); return true; }
-
         toast('找不到重试按钮', 'warning');
         return false;
     } catch (e) {
@@ -138,40 +153,33 @@ function onGenerationEnded() {
     }
 }
 
-// ========== 测试功能 ==========
+// ========== 测试 ==========
 
 function testDetection() {
     const context = getContext();
     const chat = context?.chat;
-    if (!chat || chat.length === 0) {
-        toast('没有聊天记录', 'warning');
-        return;
-    }
+    if (!chat || chat.length === 0) { toast('没有聊天记录', 'warning'); return; }
 
     const last = chat[chat.length - 1];
-    if (last.is_user) {
-        toast('最后一条是用户消息，请先让AI回复', 'warning');
-        return;
-    }
+    if (last.is_user) { toast('最后一条是用户消息', 'warning'); return; }
 
     const text = last.mes || '';
     const problem = detectProblem(text);
+    const tail = text.trim().slice(-30);
 
     if (problem) {
-        toast(`检测结果：「${problem}」✗\n实际使用时会自动重试`, 'warning');
+        toast(`检测结果：「${problem}」✗\n末尾："${tail}"`, 'warning');
     } else {
-        const preview = text.trim().slice(-20);
-        toast(`检测结果：正常 ✓\n末尾："${preview}"`, 'success');
+        toast(`检测结果：正常 ✓\n末尾："${tail}"`, 'success');
     }
 }
 
 function testSwipe() {
     toast('手动触发swipe...', 'info');
-    const ok = doRetry();
-    if (ok) toast('swipe已触发！', 'success');
+    if (doRetry()) toast('swipe已触发！', 'success');
 }
 
-// ========== 设置面板 ==========
+// ========== UI ==========
 
 function addUI() {
     const html = `
@@ -194,6 +202,11 @@ function addUI() {
                     <input id="ar_trunc" type="checkbox" />
                     <span>检测截断</span>
                 </label>
+                <div style="margin:6px 0">
+                    <label style="display:block;margin-bottom:2px">结束标记（填你预设/角色卡的结束符号）</label>
+                    <input id="ar_marker" type="text" placeholder="如 > 或 --> 留空则用自动检测" style="width:100%;box-sizing:border-box" />
+                    <small style="opacity:0.6">回复末尾没有这个标记 = 截断。留空则按标点自动判断。</small>
+                </div>
                 <div style="margin:4px 0">
                     <label>最大重试 <input id="ar_max" type="number" min="1" max="10" style="width:50px" /></label>
                 </div>
@@ -214,36 +227,30 @@ function addUI() {
     </div>`;
 
     const $target = jQuery('#extensions_settings2, #extensions_settings').first();
-    if ($target.length) {
-        $target.append(html);
-    } else {
-        jQuery('#top-settings-holder').append(html);
-    }
+    if ($target.length) $target.append(html);
+    else jQuery('#top-settings-holder').append(html);
 
     const s = getSettings();
 
     jQuery('#ar_enabled').prop('checked', s.enabled).on('change', function () {
-        s.enabled = this.checked;
-        saveSettingsDebounced();
+        s.enabled = this.checked; saveSettingsDebounced();
     });
     jQuery('#ar_empty').prop('checked', s.detectEmpty).on('change', function () {
-        s.detectEmpty = this.checked;
-        saveSettingsDebounced();
+        s.detectEmpty = this.checked; saveSettingsDebounced();
     });
     jQuery('#ar_trunc').prop('checked', s.detectTruncation).on('change', function () {
-        s.detectTruncation = this.checked;
-        saveSettingsDebounced();
+        s.detectTruncation = this.checked; saveSettingsDebounced();
+    });
+    jQuery('#ar_marker').val(s.endMarker).on('input', function () {
+        s.endMarker = this.value; saveSettingsDebounced();
     });
     jQuery('#ar_max').val(s.maxRetries).on('input', function () {
-        s.maxRetries = parseInt(this.value) || DEFAULTS.maxRetries;
-        saveSettingsDebounced();
+        s.maxRetries = parseInt(this.value) || DEFAULTS.maxRetries; saveSettingsDebounced();
     });
     jQuery('#ar_delay').val(s.retryDelay).on('input', function () {
-        s.retryDelay = parseInt(this.value) || DEFAULTS.retryDelay;
-        saveSettingsDebounced();
+        s.retryDelay = parseInt(this.value) || DEFAULTS.retryDelay; saveSettingsDebounced();
     });
 
-    // 测试按钮
     jQuery('#ar_test_detect').on('click', testDetection);
     jQuery('#ar_test_swipe').on('click', testSwipe);
 }
@@ -254,5 +261,5 @@ jQuery(async () => {
     getSettings();
     addUI();
     eventSource.on(event_types.GENERATION_ENDED, onGenerationEnded);
-    toast('v1.2.0 已加载', 'success');
+    toast('v1.3.0 已加载', 'success');
 });
