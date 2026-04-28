@@ -144,20 +144,26 @@ function doRegenerate() {
     try {
         const context = getContext();
 
-        // 方式1：各种可能的DOM选择器
+        // 方式1：内部generate API
+        if (typeof context.generate === 'function') {
+            context.generate('regenerate');
+            return true;
+        }
+
+        // 方式2：slash命令
+        if (typeof context.executeSlashCommandsWithOptions === 'function') {
+            context.executeSlashCommandsWithOptions('/regen');
+            return true;
+        }
+
+        // 方式3：DOM按钮
         const selectors = ['#option_regenerate', '.option_regenerate', '[id*="regenerate"]'];
         for (const sel of selectors) {
             const $el = jQuery(sel);
             if ($el.length) { $el.last().trigger('click'); return true; }
         }
 
-        // 方式2：slash命令
-        if (typeof context.executeSlashCommandsWithOptions === 'function') {
-            context.executeSlashCommandsWithOptions('/regenerate');
-            return true;
-        }
-
-        // 方式3：fallback到swipe
+        // 最后fallback到swipe
         toast('找不到regenerate，用swipe代替', 'info');
         return doSwipe();
     } catch (e) {
