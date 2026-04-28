@@ -1,0 +1,12 @@
+{
+    "display_name": "Auto Retry (截断/空回自动重试)",
+    "loading_order": 100,
+    "requires": [],
+    "optional": [],
+    "js": "index.js",
+    "css": "",
+    "author": "Elvis & 小九",
+    "version": "1.0.0",
+    "homePage": "",
+    "auto_update": false
+}
