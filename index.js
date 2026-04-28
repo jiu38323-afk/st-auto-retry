@@ -1,7 +1,15 @@
 /**
  * Auto Retry - 截断/空回自动重试插件
  * by Elvis
- * v1.3.0 — 自定义结束标记 + 改进截断检测
+ * v1.4.0 — 修复swipe/regenerate不工作的问题
+ *
+ * 改动（vs v1.3.0）：
+ * - doSwipe / doRegenerate 改用 context.generate(type)，
+ *   不再依赖 ST 不存在的 swipe_right / DOM 选择器 / slash 命令。
+ *   依据：public/scripts/st-context.js 中 generate: Generate 是 ST 暴露给扩展的
+ *   官方生成入口，type 接受 'swipe' / 'regenerate' / 'continue' 等。
+ * - 移除了 minLength<100 的强制升级逻辑，尊重用户设置。
+ * - DOM 选择器降级为最后兜底，正常路径不再触碰它们。
  *
  * 检测AI回复截断或空回，自动静默触发重新生成。
  */
@@ -41,8 +49,6 @@ function getSettings() {
     for (const [key, val] of Object.entries(DEFAULTS)) {
         if (s[key] === undefined) s[key] = val;
     }
-    // 迁移：旧版本minLength太小，强制更新
-    if (s.minLength < 100) s.minLength = 100;
     return s;
 }
 
@@ -107,68 +113,52 @@ function detectProblem(text) {
 
 // ========== 重试 ==========
 
-/** swipe：翻页生成新备选（保留当前回复，用于截断） */
-function doSwipe() {
+/**
+ * 调用 ST 的 Generate 函数，type 可选 'swipe' / 'regenerate' / 'continue' 等。
+ * 这是 ST 官方暴露给扩展的生成入口（见 public/scripts/st-context.js）。
+ */
+function callGenerate(type) {
     try {
         const context = getContext();
-
-        // 方式1: 内部API
-        if (typeof context.swipe_right === 'function') {
-            context.swipe_right();
+        if (typeof context.generate === 'function') {
+            // 不 await：让事件循环处理后续 GENERATION_STARTED / GENERATION_ENDED
+            context.generate(type);
             return true;
         }
+        console.warn('[Auto-Retry] context.generate 不存在，ST 版本可能不兼容');
+        return false;
+    } catch (e) {
+        toast(`触发 ${type} 失败: ${e.message}`, 'error');
+        console.error('[Auto-Retry] callGenerate error:', e);
+        return false;
+    }
+}
 
-        // 方式2: 各种可能的DOM选择器
+/** swipe：翻页生成新备选（保留当前回复，用于截断） */
+function doSwipe() {
+    if (callGenerate('swipe')) return true;
+
+    // 兜底：旧版 DOM 选择器（不该走到这）
+    try {
         const selectors = ['#swipe_right', '.swipe_right', '.swipe-right', '[id*="swipe_right"]'];
         for (const sel of selectors) {
             const $el = jQuery(sel);
             if ($el.length) { $el.last().trigger('click'); return true; }
         }
-
-        // 方式3: slash命令
-        if (typeof context.executeSlashCommandsWithOptions === 'function') {
-            context.executeSlashCommandsWithOptions('/swipe');
-            return true;
-        }
-
-        toast('找不到swipe方式', 'warning');
-        return false;
     } catch (e) {
-        toast('swipe失败: ' + e.message, 'error');
-        return false;
+        // 无所谓
     }
+    toast('swipe 触发失败：context.generate 不可用', 'error');
+    return false;
 }
 
-/** regenerate：删掉空回复再重新生成 */
-async function doRegenerate() {
-    try {
-        const context = getContext();
+/** regenerate：重新生成（替换当前回复，用于空回） */
+function doRegenerate() {
+    if (callGenerate('regenerate')) return true;
 
-        // 删掉最后一条空回复
-        if (typeof context.deleteLastMessage === 'function') {
-            context.deleteLastMessage();
-            // 等一下再生成
-            await new Promise(r => setTimeout(r, 500));
-        }
-
-        // 触发新的生成
-        if (typeof context.generate === 'function') {
-            context.generate();
-            return true;
-        }
-
-        // fallback：slash命令
-        if (typeof context.executeSlashCommandsWithOptions === 'function') {
-            context.executeSlashCommandsWithOptions('/regen');
-            return true;
-        }
-
-        toast('重新生成失败', 'warning');
-        return false;
-    } catch (e) {
-        toast('重新生成失败: ' + e.message, 'error');
-        return false;
-    }
+    // 兜底：fallback到swipe（不该走到这）
+    toast('regenerate 不可用，降级为 swipe', 'warning');
+    return doSwipe();
 }
 
 function onGenerationEnded() {
@@ -249,6 +239,11 @@ function testSwipe() {
     if (doSwipe()) toast('swipe已触发！', 'success');
 }
 
+function testRegenerate() {
+    toast('手动触发regenerate...', 'info');
+    if (doRegenerate()) toast('regenerate已触发！', 'success');
+}
+
 // ========== UI ==========
 
 function addUI() {
@@ -286,8 +281,8 @@ function addUI() {
                     <small style="opacity:0.6">缓冲区标记优先。只有缓冲区标记为空时才看这个。</small>
                 </div>
                 <div style="margin:4px 0">
-                    <label>空回阈值(字符) <input id="ar_minlen" type="number" min="0" max="5000" step="100" style="width:80px" /></label>
-                    <br/><small style="opacity:0.6">少于这个字符数=空回（重新生成），多于=截断（翻页swipe）</small>
+                    <label>空回阈值(字符) <input id="ar_minlen" type="number" min="0" max="5000" step="10" style="width:80px" /></label>
+                    <br/><small style="opacity:0.6">少于这个字符数判定为空回（regenerate替换）。截断是独立判断（swipe保留）。</small>
                 </div>
                 <div style="margin:4px 0">
                     <label>最大重试 <input id="ar_max" type="number" min="1" max="10" style="width:50px" /></label>
@@ -296,12 +291,15 @@ function addUI() {
                     <label>延迟(ms) <input id="ar_delay" type="number" min="500" max="10000" step="100" style="width:70px" /></label>
                 </div>
                 <hr style="margin:8px 0" />
-                <div style="display:flex;gap:6px">
+                <div style="display:flex;gap:6px;flex-wrap:wrap">
                     <button id="ar_test_detect" class="menu_button" style="font-size:12px;padding:4px 8px">
                         🔍 检测当前回复
                     </button>
                     <button id="ar_test_swipe" class="menu_button" style="font-size:12px;padding:4px 8px">
-                        🔄 手动触发swipe
+                        🔄 测试swipe
+                    </button>
+                    <button id="ar_test_regen" class="menu_button" style="font-size:12px;padding:4px 8px">
+                        ♻️ 测试regenerate
                     </button>
                 </div>
             </div>
@@ -344,6 +342,7 @@ function addUI() {
 
     jQuery('#ar_test_detect').on('click', testDetection);
     jQuery('#ar_test_swipe').on('click', testSwipe);
+    jQuery('#ar_test_regen').on('click', testRegenerate);
 }
 
 // ========== 初始化 ==========
@@ -353,5 +352,5 @@ jQuery(async () => {
     addUI();
     eventSource.on(event_types.GENERATION_ENDED, onGenerationEnded);
     eventSource.on(event_types.GENERATION_STOPPED, () => { manualStop = true; });
-    toast('v1.3.0 已加载', 'success');
+    toast('v1.4.0 已加载', 'success');
 });
