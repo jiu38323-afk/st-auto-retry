@@ -1,15 +1,16 @@
 /**
  * Auto Retry - 截断/空回自动重试插件
  * by Elvis
- * v1.4.0 — 修复swipe/regenerate不工作的问题
+ * v1.6.0 — 保留v1.3已验证的doSwipe，只修doRegenerate
  *
  * 改动（vs v1.3.0）：
- * - doSwipe / doRegenerate 改用 context.generate(type)，
- *   不再依赖 ST 不存在的 swipe_right / DOM 选择器 / slash 命令。
- *   依据：public/scripts/st-context.js 中 generate: Generate 是 ST 暴露给扩展的
- *   官方生成入口，type 接受 'swipe' / 'regenerate' / 'continue' 等。
- * - 移除了 minLength<100 的强制升级逻辑，尊重用户设置。
- * - DOM 选择器降级为最后兜底，正常路径不再触碰它们。
+ * - doSwipe 完全保留 v1.3 实现（小九实测能正确保留前一变体，不动）
+ * - doRegenerate 改用 context.generate('regenerate')
+ *   原 v1.3 的 deleteLastMessage + generate() 不传参数 + fallback到错误命令名 /regen，
+ *   全部失效，所以一直 fallback 到 doSwipe，表现成"空回也走翻页"。
+ * - 删除 minLength<100 的强制升级逻辑，尊重用户设置
+ * - 修复 UI 说明误导（空回/截断是独立判断，不是阈值二选一）
+ * - 新增 测试regenerate 按钮
  *
  * 检测AI回复截断或空回，自动静默触发重新生成。
  */
@@ -99,7 +100,6 @@ function isTruncatedResponse(text) {
     const okEndings = '>＞';
     if (okEndings.includes(lastChar)) return false;
 
-    // 末尾不是正常标点 → 截断（已排除<20字的短文本）
     console.log(`[Auto-Retry] 疑似截断 — 末尾:"${lastChar}" 长度:${trimmed.length}`);
     return true;
 }
@@ -114,51 +114,70 @@ function detectProblem(text) {
 // ========== 重试 ==========
 
 /**
- * 调用 ST 的 Generate 函数，type 可选 'swipe' / 'regenerate' / 'continue' 等。
- * 这是 ST 官方暴露给扩展的生成入口（见 public/scripts/st-context.js）。
+ * swipe：翻页生成新备选（保留当前回复，用于截断）
+ * 完全保留 v1.3 实现 — 小九实测能正确保留前一变体。
  */
-function callGenerate(type) {
+function doSwipe() {
     try {
         const context = getContext();
-        if (typeof context.generate === 'function') {
-            // 不 await：让事件循环处理后续 GENERATION_STARTED / GENERATION_ENDED
-            context.generate(type);
+
+        // 方式1: 内部API
+        if (typeof context.swipe_right === 'function') {
+            context.swipe_right();
             return true;
         }
-        console.warn('[Auto-Retry] context.generate 不存在，ST 版本可能不兼容');
-        return false;
-    } catch (e) {
-        toast(`触发 ${type} 失败: ${e.message}`, 'error');
-        console.error('[Auto-Retry] callGenerate error:', e);
-        return false;
-    }
-}
 
-/** swipe：翻页生成新备选（保留当前回复，用于截断） */
-function doSwipe() {
-    if (callGenerate('swipe')) return true;
-
-    // 兜底：旧版 DOM 选择器（不该走到这）
-    try {
+        // 方式2: 各种可能的DOM选择器
         const selectors = ['#swipe_right', '.swipe_right', '.swipe-right', '[id*="swipe_right"]'];
         for (const sel of selectors) {
             const $el = jQuery(sel);
             if ($el.length) { $el.last().trigger('click'); return true; }
         }
+
+        // 方式3: slash命令
+        if (typeof context.executeSlashCommandsWithOptions === 'function') {
+            context.executeSlashCommandsWithOptions('/swipe');
+            return true;
+        }
+
+        toast('找不到swipe方式', 'warning');
+        return false;
     } catch (e) {
-        // 无所谓
+        toast('swipe失败: ' + e.message, 'error');
+        return false;
     }
-    toast('swipe 触发失败：context.generate 不可用', 'error');
-    return false;
 }
 
-/** regenerate：重新生成（替换当前回复，用于空回） */
+/**
+ * regenerate：重新生成替换当前回复（用于空回）
+ * 用 context.generate('regenerate') —— ST 内部的 regenerate 类型会自动
+ * 处理"删除最后一条AI消息+触发新生成"的完整流程，不需要手动 deleteLastMessage。
+ */
 function doRegenerate() {
-    if (callGenerate('regenerate')) return true;
+    try {
+        const context = getContext();
 
-    // 兜底：fallback到swipe（不该走到这）
-    toast('regenerate 不可用，降级为 swipe', 'warning');
-    return doSwipe();
+        // 方式1: context.generate('regenerate') 是 ST 官方的 regenerate 入口
+        if (typeof context.generate === 'function') {
+            context.generate('regenerate');
+            return true;
+        }
+
+        // 方式2: slash命令（命令名是 /regenerate，不是 /regen）
+        if (typeof context.executeSlashCommandsWithOptions === 'function') {
+            const result = context.executeSlashCommandsWithOptions('/regenerate');
+            if (result && typeof result.catch === 'function') {
+                result.catch(e => console.error('[Auto-Retry] /regenerate error:', e));
+            }
+            return true;
+        }
+
+        toast('找不到regenerate方式，降级为swipe', 'warning');
+        return doSwipe();
+    } catch (e) {
+        toast('重新生成失败: ' + e.message, 'error');
+        return false;
+    }
 }
 
 function onGenerationEnded() {
@@ -352,5 +371,5 @@ jQuery(async () => {
     addUI();
     eventSource.on(event_types.GENERATION_ENDED, onGenerationEnded);
     eventSource.on(event_types.GENERATION_STOPPED, () => { manualStop = true; });
-    toast('v1.4.0 已加载', 'success');
+    toast('v1.6.0 已加载', 'success');
 });
