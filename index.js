@@ -62,10 +62,8 @@ function isTruncatedResponse(text) {
     // ---- 模式A：自定义结束标记 ----
     if (s.endMarker && s.endMarker.trim()) {
         const marker = s.endMarker.trim();
-        const range = Math.min(s.markerSearchRange, trimmed.length);
-        const tail = trimmed.slice(-range);
-        if (!tail.includes(marker)) {
-            console.log(`[Auto-Retry] 结束标记「${marker}」未在末尾${range}字符内找到`);
+        if (!trimmed.endsWith(marker)) {
+            console.log(`[Auto-Retry] 末尾不是「${marker}」→ 截断`);
             return true;
         }
         return false;
