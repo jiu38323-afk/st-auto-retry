@@ -97,14 +97,20 @@ function detectProblem(text) {
 
 function doRetry() {
     try {
-        const el = document.getElementById('swipe_right')
-            || document.querySelector('.swipe_right');
-        if (el) { el.click(); return true; }
+        // 优先用SillyTavern内部API（最可靠）
+        const context = getContext();
+        if (typeof context.swipe_right === 'function') {
+            context.swipe_right();
+            return true;
+        }
+
+        // fallback: DOM按钮
         const $s = jQuery('#swipe_right');
         if ($s.length) { $s.trigger('click'); return true; }
         const $r = jQuery('#option_regenerate');
         if ($r.length) { $r.trigger('click'); return true; }
-        toast('找不到重试按钮', 'warning');
+
+        toast('找不到重试方式', 'warning');
         return false;
     } catch (e) {
         toast('重试失败: ' + e.message, 'error');
